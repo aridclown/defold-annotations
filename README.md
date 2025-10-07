@@ -62,5 +62,4 @@ It's also useful to turn the `config.clean_traces` to `true` in [`config.lua`](h
 
 ## Alternatives
 
-- [defold-api-emmylua](https://github.com/d954mas/defold-api-emmylua/) (Java) by Dmitry Popov
 - [defold-lua-annotations](https://github.com/mikatuo/defold-lua-annotations/) (C#) by Dennis Shendrik
