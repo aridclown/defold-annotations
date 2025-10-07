@@ -241,6 +241,9 @@ config.local_type_replacements = {
   ['gui.stop_particlefx'] = {
     param_table_options = '{ clear?:boolean }'
   },
+  ['gui.get_layouts'] = {
+    ['return_table_'] = 'table<hash, vector3>'
+  },
   ['http.server.external_file_response'] = {
     ['param_table&lt;string,string&gt;_headers'] = 'table<string, string>'
   },
@@ -266,7 +269,7 @@ config.local_type_replacements = {
     param_table_options = '{ offset?:number, playback_rate?:number }'
   },
   ['sound.play'] = {
-    param_table_play_properties = '{ delay?:number, gain?:number, pan?:number, speed?:number }'
+    param_table_play_properties = '{ delay?:number, gain?:number, pan?:number, speed?:number, start_time?:number, start_frame?:number }'
   },
   ['sound.stop'] = {
     param_table_stop_properties = '{ play_id:number }'
@@ -312,7 +315,8 @@ config.local_type_replacements = {
     param_table_table = '{ type:number, width:number, height:number, depth:number, format:number, flags?:number, max_mipmaps?:number, compression_type?:number}'
   },
   ['resource.create_texture_async'] = {
-    param_table_table = '{ type:number, width:number, height:number, depth:number, format:number, flags?:number, max_mipmaps?:number, compression_type?:number}'
+    param_table_table = '{ type:number, width:number, height:number, depth:number, format:number, flags?:number, max_mipmaps?:number, compression_type?:number}',
+    param_function_callback = 'fun(self, request_id, resource)'
   },
   ['resource.set_texture'] = {
     param_table_table = '{ type:number, width:number, height:number, format:number, x?:number, y?:number, z?:number, mipmap?:number, compression_type?:number}'
@@ -331,7 +335,7 @@ config.local_type_replacements = {
     param_table_table = '{ transfer_ownership?: boolean }'
   },
   ['render.draw'] = {
-    param_table_options = '{ frustum?:matrix4, frustum_planes?:number, constants?:constant_buffer }'
+    param_table_options = '{ frustum?:matrix4, frustum_planes?:number, constants?:constant_buffer, sort_order?:integer }'
   },
   ['render.draw_debug3d'] = {
     param_table_options = '{ frustum?:matrix4, frustum_planes?:number }'
