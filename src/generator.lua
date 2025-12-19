@@ -153,6 +153,19 @@ local function make_const(element)
   local result = ''
 
   result = result .. make_comment(element.description) .. '\n'
+  result = result .. '---@type number\n'
+  result = result .. element.name .. ' = nil'
+
+  return result
+end
+
+---Make an annotatable variable
+---@param element element
+---@return string
+local function make_var(element)
+  local result = ''
+
+  result = result .. make_comment(element.description) .. '\n'
   result = result .. element.name .. ' = nil'
 
   return result
@@ -408,7 +421,7 @@ local function generate_api(module, defold_version)
 
   local makers = {
     FUNCTION = make_func,
-    VARIABLE = make_const,
+    VARIABLE = make_var,
     CONSTANT = make_const,
     BASIC_CLASS = make_class,
     BASIC_ALIAS = make_alias
