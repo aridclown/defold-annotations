@@ -13,10 +13,13 @@ local terminal = require 'src.terminal'
 
 local generator = {}
 
+local namespace_constants = {}
+local namespace_aliases = {}
+
 --
 -- Local
 
--- Apply a list of inline tag rules, replacing html tags with their corresponding markdown syntax
+---Apply a list of inline tag rules, replacing html tags with their corresponding markdown syntax
 ---@param s string
 ---@param inline_rules table
 ---@return string
@@ -67,7 +70,7 @@ local function decode_text(text)
   return result
 end
 
----Make an annotable comment
+---Make an annotatable comment
 ---@param text string
 ---@param tab? string Indent string, default is '---'
 ---@return string
@@ -89,7 +92,7 @@ local function make_comment(text, tab)
   return result
 end
 
----Make an annotable module header
+---Make an annotatable module header
 ---@param defold_version string
 ---@param title string
 ---@param description string
@@ -112,7 +115,7 @@ local function make_header(defold_version, title, description)
   return result
 end
 
----Make annotable diagnostic disable flags
+---Make annotatable diagnostic disable flags
 ---@param disabled_diagnostics string[] list of diagnostic disabel flags
 ---@return string
 local function make_disabled_diagnostics(disabled_diagnostics)
@@ -131,7 +134,34 @@ local function make_disabled_diagnostics(disabled_diagnostics)
   return result
 end
 
----Wrap the class body to an annotable namespace
+---Compose the namespace-level `---@field` entries for collected constants
+---@param namespace string
+---@return string
+local function make_constant_fields(namespace)
+  local constants = namespace_constants[namespace]
+
+  if not constants then
+    return ''
+  end
+
+  local parts = {}
+
+  for _, short_name in ipairs(constants.order) do
+    local element = constants.items[short_name]
+
+    if element.description and element.description ~= '' then
+      table.insert(parts, make_comment(element.description))
+    end
+
+    local type_hint = element.constant_type or 'integer'
+    table.insert(parts, '---@field ' .. short_name .. ' ' .. type_hint)
+  end
+
+  local text = table.concat(parts, '\n')
+  return #text > 0 and (text .. '\n') or ''
+end
+
+---Wrap the class body to an annotatable namespace
 ---@param name string
 ---@param body string
 ---@return string
@@ -139,6 +169,7 @@ local function make_namespace(name, body)
   local result = ''
 
   result = result .. '---@class defold_api.' .. name .. '\n'
+  result = result .. make_constant_fields(name)
   result = result .. name .. ' = {}\n\n'
   result = result .. body .. '\n\n'
   result = result .. 'return ' .. name
@@ -146,17 +177,133 @@ local function make_namespace(name, body)
   return result
 end
 
----Make an annotatable constant
+---Constants are emitted as namespace fields and skipped here
 ---@param element element
 ---@return string
 local function make_const(element)
-  local result = ''
+  return nil
+end
 
-  result = result .. make_comment(element.description) .. '\n'
-  result = result .. '---@type number\n'
-  result = result .. element.name .. ' = nil'
+---Split `namespace.CONSTANT` into `namespace`, `CONSTANT`
+---@param name string
+---@return string?, string?
+local function extract_namespace(name)
+  if not name then
+    return nil, nil
+  end
 
-  return result
+  return name:match('^([%w_]+)%.(.+)$')
+end
+
+---Record a constant so it can be rendered once per namespace
+---@param namespace string
+---@param short_name string
+---@param element element
+local function register_constant(namespace, short_name, element)
+  if not namespace or not short_name then
+    return
+  end
+
+  namespace_constants[namespace] = namespace_constants[namespace] or { order = {}, items = {} }
+  local constants = namespace_constants[namespace]
+
+  if not constants.items[short_name] then
+    constants.items[short_name] = element
+    table.insert(constants.order, short_name)
+  end
+end
+
+---Remember the type a constant should expose when rendered
+---@param full_name string
+---@param type_name string
+local function set_constant_type(full_name, type_name)
+  local namespace, short_name = extract_namespace(full_name)
+
+  if not namespace or not short_name then
+    return
+  end
+
+  local constants = namespace_constants[namespace]
+
+  if not constants then
+    return
+  end
+
+  local element = constants.items[short_name]
+
+  if element then
+    element.constant_type = type_name
+  end
+end
+
+---Return true if an alias was already registered for the given type
+---@param type string
+---@return boolean
+local function alias_is_registered(type)
+  local namespace, alias_name = extract_namespace(type)
+
+  if not namespace or not alias_name then
+    return false
+  end
+
+  local aliases = namespace_aliases[namespace]
+  return aliases and aliases[alias_name] ~= nil
+end
+
+---Register an alias for a namespace along with the constants it references
+---@param namespace string
+---@param alias_name string
+---@param full_names string[]
+local function register_alias(namespace, alias_name, full_names)
+  namespace_aliases[namespace] = namespace_aliases[namespace] or {}
+  local aliases = namespace_aliases[namespace]
+  aliases[alias_name] = aliases[alias_name] or { order = {}, items = {} }
+  local alias = aliases[alias_name]
+
+  for _, full_name in ipairs(full_names) do
+    if not alias.items[full_name] then
+      alias.items[full_name] = true
+      table.insert(alias.order, full_name)
+    end
+  end
+end
+
+---Render `---@alias` blocks for a namespace
+---@param namespace string
+---@return string
+local function make_alias_lines(namespace)
+  local aliases = namespace_aliases[namespace]
+
+  if not aliases then
+    return ''
+  end
+
+  local alias_names = utils.sorted_keys(aliases)
+  local parts = {}
+
+  for index, alias_name in ipairs(alias_names) do
+    local alias = aliases[alias_name]
+    table.insert(parts, '---@alias ' .. namespace .. '.' .. alias_name)
+
+    local constants = {}
+
+    for _, full_name in ipairs(alias.order) do
+      table.insert(constants, full_name)
+    end
+
+    table.sort(constants)
+
+    for _, full_name in ipairs(constants) do
+      table.insert(parts, '---| `' .. full_name .. '`')
+    end
+
+    if index < #alias_names then
+      table.insert(parts, '')
+    end
+  end
+
+  local text = table.concat(parts, '\n')
+  return #text > 0 and text or ''
 end
 
 ---Make an annotatable variable
@@ -192,17 +339,227 @@ local function make_param_name(parameter, is_return, element)
   return name
 end
 
----Make annotatable param types
+---Make annotatable param types, deriving alias unions when constants are referenced
 ---@param name string
 ---@param types table
 ---@param is_return boolean
 ---@param element element
+---@param description string?
 ---@return string concated_string
-local function make_param_types(name, types, is_return, element)
+local function make_param_types(name, types, is_return, element, description)
   local local_replacements = config.local_type_replacements[element.name] or {}
+  local original_types = {}
+  local includes_constant_placeholder = false
+  local fallback_is_string = false
+  local fallback_is_hash = false
+
+  for index, type in ipairs(types) do
+    if type:sub(1, 5) == 'type:' then
+      type = type:sub(6)
+      types[index] = type
+    end
+
+    original_types[index] = type
+
+    if type == 'constant' then
+      includes_constant_placeholder = true
+    elseif type == 'string' then
+      fallback_is_string = true
+    elseif type == 'hash' then
+      fallback_is_hash = true
+    end
+  end
+
+  ---Lookup a registered constant for a namespace
+  ---@param namespace string?
+  ---@param short_name string?
+  ---@return element?
+  local function get_constant(namespace, short_name)
+    local constants = namespace_constants[namespace]
+    return constants and constants.items[short_name]
+  end
+
+  ---Compute the common underscore-separated prefix for a batch of constant names
+  ---@param short_names string[]
+  ---@return string?
+  local function get_common_prefix(short_names)
+    if #short_names == 0 then
+      return nil
+    end
+
+    local prefix_tokens
+
+    for _, short_name in ipairs(short_names) do
+      local tokens = {}
+
+      for token in short_name:gmatch('[^_]+') do
+        table.insert(tokens, token)
+      end
+
+      if not prefix_tokens then
+        prefix_tokens = tokens
+      else
+        local new_prefix = {}
+
+        for index = 1, math.min(#prefix_tokens, #tokens) do
+          if prefix_tokens[index] == tokens[index] then
+            table.insert(new_prefix, prefix_tokens[index])
+          else
+            break
+          end
+        end
+
+        prefix_tokens = new_prefix
+      end
+
+      if not prefix_tokens or #prefix_tokens == 0 then
+        break
+      end
+    end
+
+    if prefix_tokens and #prefix_tokens > 0 then
+      return table.concat(prefix_tokens, '_')
+    end
+
+    return nil
+  end
+
+  local constant_map = {}
+
+  ---Register that a constant was referenced by a parameter/return description
+  ---@param full_name string
+  ---@return boolean
+  local function add_constant_usage(full_name)
+    local namespace, short_name = extract_namespace(full_name)
+
+    if namespace and short_name and get_constant(namespace, short_name) then
+      constant_map[namespace] = constant_map[namespace] or { shorts = {}, short_lookup = {}, fulls = {} }
+      local entry = constant_map[namespace]
+
+      if not entry.short_lookup[short_name] then
+        table.insert(entry.shorts, short_name)
+        entry.short_lookup[short_name] = true
+      end
+
+      entry.fulls[full_name] = short_name
+      return true
+    end
+
+    return false
+  end
+
+  for _, type in ipairs(original_types) do
+    local namespace, short_name = extract_namespace(type)
+
+    if type ~= 'constant' and namespace and short_name then
+      add_constant_usage(type)
+    end
+  end
+
+  if includes_constant_placeholder and description then
+    for namespace, raw_short_name in description:gmatch('([%w_]+)%.([%w_%*]+)') do
+      if raw_short_name:find('%*') then
+        local prefix = raw_short_name:gsub('%*', '')
+        local constants = namespace_constants[namespace]
+
+        if constants then
+          for short_name in pairs(constants.items) do
+            if short_name:sub(1, #prefix) == prefix then
+              add_constant_usage(namespace .. '.' .. short_name)
+            end
+          end
+        end
+      else
+        add_constant_usage(namespace .. '.' .. raw_short_name)
+      end
+    end
+  end
+
+  local constant_aliases = {}
+  local has_constant = false
+  local pending_aliases = {}
+  local pending_alias_order = {}
+  local constants_to_mark = {}
+  local constants_to_mark_lookup = {}
+
+  for namespace, data in pairs(constant_map) do
+    local alias_name = get_common_prefix(data.shorts)
+
+    if alias_name and #data.shorts >= 2 then
+      local alias_full_name = namespace .. '.' .. alias_name
+      if not pending_aliases[alias_full_name] then
+        pending_aliases[alias_full_name] = true
+        table.insert(pending_alias_order, alias_full_name)
+      end
+      local full_names = {}
+
+      for full_name in pairs(data.fulls) do
+        table.insert(full_names, full_name)
+        constant_aliases[full_name] = alias_full_name
+
+        if not constants_to_mark_lookup[full_name] then
+          table.insert(constants_to_mark, full_name)
+          constants_to_mark_lookup[full_name] = true
+        end
+      end
+
+      register_alias(namespace, alias_name, full_names)
+      has_constant = true
+    end
+  end
+
+  local processed_types = {}
+  local alias_added = {}
+
+  for _, type in ipairs(original_types) do
+    if type == 'constant' then
+      if not has_constant then
+        table.insert(processed_types, type)
+      end
+    else
+      local alias_name = constant_aliases[type]
+
+      if alias_name then
+        if not alias_added[alias_name] then
+          table.insert(processed_types, alias_name)
+          alias_added[alias_name] = true
+        end
+      else
+        table.insert(processed_types, type)
+      end
+    end
+  end
+
+  for _, alias_name in ipairs(pending_alias_order) do
+    if not alias_added[alias_name] then
+      table.insert(processed_types, alias_name)
+      alias_added[alias_name] = true
+    end
+  end
+
+  if has_constant then
+    local fallback_type = 'integer'
+
+    if fallback_is_string then
+      fallback_type = 'string'
+    elseif fallback_is_hash then
+      fallback_type = 'hash'
+    end
+
+    table.insert(processed_types, fallback_type)
+
+    for _, full_name in ipairs(constants_to_mark) do
+      set_constant_type(full_name, fallback_type)
+    end
+  end
+
+  types = processed_types
 
   for index = 1, #types do
     local type = types[index]
+    if type:sub(1, 5) == 'type:' then
+      type = type:sub(6)
+    end
     local is_known = false
     local replacement
 
@@ -226,6 +583,10 @@ local function make_param_types(name, types, is_return, element)
     local known_classes = utils.sorted_keys(config.known_classes)
     for _, known_class in ipairs(known_classes) do
       is_known = is_known or type == known_class
+    end
+
+    if not is_known and alias_is_registered(type) then
+      is_known = true
     end
 
     local known_aliases = utils.sorted_keys(config.known_aliases)
@@ -260,7 +621,7 @@ local function make_param_types(name, types, is_return, element)
   return result
 end
 
----Make an annotable param description
+---Make an annotatable param description
 ---@param description string
 ---@return string
 local function make_param_description(description)
@@ -270,32 +631,32 @@ local function make_param_description(description)
   return result
 end
 
----Make annotable param line
+---Make annotatable param line
 ---@param parameter table
 ---@param element element
 ---@return string
 local function make_param(parameter, element)
   local name = make_param_name(parameter, false, element)
   local is_optional = parameter.is_optional == 'True'
-  local joined_types = make_param_types(name, parameter.types, false, element)
+  local joined_types = make_param_types(name, parameter.types, false, element, parameter.doc)
   local description = make_param_description(parameter.doc)
 
   return '---@param ' .. name .. (is_optional and '? ' or ' ') .. joined_types .. ' ' .. description
 end
 
----Make an annotable return line
+---Make an annotatable return line
 ---@param returnvalue table
 ---@param element element
 ---@return string
 local function make_return(returnvalue, element)
   local name = make_param_name(returnvalue, true, element)
-  local types = make_param_types(name, returnvalue.types, true, element)
+  local types = make_param_types(name, returnvalue.types, true, element, returnvalue.doc)
   local description = make_param_description(returnvalue.doc)
 
   return '---@return ' .. types .. ' ' .. name .. ' ' .. description
 end
 
----Make annotable func lines
+---Make annotatable func lines
 ---@param element element
 ---@return string?
 local function make_func(element)
@@ -353,7 +714,7 @@ local function make_func(element)
   return result
 end
 
----Make an annotable alias
+---Make an annotatable alias
 ---@param element element
 ---@return string
 local function make_alias(element)
@@ -470,6 +831,18 @@ local function generate_api(module, defold_version)
     end
   end
 
+  local aliases = make_alias_lines(module.info.namespace)
+
+  if #aliases > 0 then
+    if #body > 0 then
+      body = aliases .. '\n\n' .. body
+    else
+      body = aliases
+    end
+  end
+
+  body = body:gsub('%s+$', '')
+
   content = content .. make_disabled_diagnostics(config.disabled_diagnostics) .. '\n\n'
 
   if namespace_is_required then
@@ -482,6 +855,25 @@ local function generate_api(module, defold_version)
   utils.save_file(content, api_path)
 end
 
+---Reset cached constant and alias tables
+local function reset_namespace_data()
+  namespace_constants = {}
+  namespace_aliases = {}
+end
+
+---Scan all modules for constants so namespace fields can be emitted before generation
+---@param modules table<string, module>
+local function collect_constants(modules)
+  for _, module in pairs(modules) do
+    for _, element in ipairs(module.elements) do
+      if element.type == 'CONSTANT' then
+        local namespace, short_name = extract_namespace(element.name)
+        register_constant(namespace, short_name, element)
+      end
+    end
+  end
+end
+
 --
 -- Public
 
@@ -491,6 +883,7 @@ end
 function generator.generate_api(modules, defold_version)
   print('-- Annotations Generation')
 
+  reset_namespace_data()
   terminal.delete_folder(config.api_folder)
   terminal.create_folder(config.api_folder)
 
@@ -519,6 +912,8 @@ function generator.generate_api(modules, defold_version)
       merged_modules[namespace] = module
     end
   end
+
+  collect_constants(merged_modules)
 
   for _, module in pairs(merged_modules) do
     generate_api(module, defold_version)
