@@ -185,6 +185,7 @@ local function make_const(element)
 end
 
 ---Split `namespace.CONSTANT` into `namespace`, `CONSTANT`
+---For multi-level namespaces like `b2d.body.B2_STATIC_BODY`, extracts the last component as the constant name
 ---@param name string
 ---@return string?, string?
 local function extract_namespace(name)
@@ -192,7 +193,16 @@ local function extract_namespace(name)
     return nil, nil
   end
 
-  return name:match('^([%w_]+)%.(.+)$')
+  -- Find the last dot to split namespace from constant name
+  local last_dot = name:match('^.*()%.')
+  if not last_dot then
+    return nil, nil
+  end
+  
+  local namespace = name:sub(1, last_dot - 1)
+  local constant_name = name:sub(last_dot + 1)
+  
+  return namespace, constant_name
 end
 
 ---Record a constant so it can be rendered once per namespace
@@ -874,6 +884,87 @@ local function collect_constants(modules)
   end
 end
 
+---Pre-generate aliases for constant groups with common prefixes
+local function generate_constant_aliases()
+  for namespace, constants in pairs(namespace_constants) do
+    -- Collect all possible prefixes and their matching constants
+    local prefix_to_constants = {}
+    
+    for _, short_name in ipairs(constants.order) do
+      local tokens = {}
+      for token in short_name:gmatch('[^_]+') do
+        table.insert(tokens, token)
+      end
+      
+      -- Generate all possible prefixes (1 to n-1 tokens)
+      for len = 1, #tokens - 1 do
+        local prefix_tokens = {}
+        for i = 1, len do
+          prefix_tokens[i] = tokens[i]
+        end
+        local prefix = table.concat(prefix_tokens, '_')
+        
+        -- Check if constant actually starts with this prefix followed by underscore
+        if short_name:sub(1, #prefix + 1) == prefix .. '_' then
+          if not prefix_to_constants[prefix] then
+            prefix_to_constants[prefix] = {}
+          end
+          
+          -- Add if not already present
+          local found = false
+          for _, existing in ipairs(prefix_to_constants[prefix]) do
+            if existing == short_name then
+              found = true
+              break
+            end
+          end
+          
+          if not found then
+            table.insert(prefix_to_constants[prefix], short_name)
+          end
+        end
+      end
+    end
+    
+    -- Sort prefixes by token count (prefer shorter = more general)
+    local sorted_prefixes = {}
+    for prefix, matching_constants in pairs(prefix_to_constants) do
+      if #matching_constants >= 2 then
+        table.insert(sorted_prefixes, {
+          prefix = prefix,
+          constants = matching_constants,
+          token_count = select(2, prefix:gsub('_', '')) + 1
+        })
+      end
+    end
+    
+    table.sort(sorted_prefixes, function(a, b)
+      return a.token_count > b.token_count  -- Prefer longer (more specific) prefixes
+    end)
+    
+    -- Register aliases, marking constants as used
+    local used_constants = {}
+    for _, entry in ipairs(sorted_prefixes) do
+      local available = {}
+      for _, short_name in ipairs(entry.constants) do
+        if not used_constants[short_name] then
+          table.insert(available, short_name)
+        end
+      end
+      
+      if #available >= 2 then
+        local full_names = {}
+        for _, short_name in ipairs(available) do
+          table.insert(full_names, namespace .. '.' .. short_name)
+          used_constants[short_name] = true
+        end
+        
+        register_alias(namespace, entry.prefix, full_names)
+      end
+    end
+  end
+end
+
 --
 -- Public
 
@@ -914,6 +1005,7 @@ function generator.generate_api(modules, defold_version)
   end
 
   collect_constants(merged_modules)
+  generate_constant_aliases()
 
   for _, module in pairs(merged_modules) do
     generate_api(module, defold_version)

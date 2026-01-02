@@ -244,6 +244,56 @@ function TestGeneratorAlias:test_alias_injection_for_table_and_function_types()
   luaunit.assertStrContains(buffer_output, '---@return buffer.VALUE_TYPE|nil|integer value_type')
 end
 
+function TestGeneratorAlias:test_proactive_alias_generation_without_function_references()
+  local module = {
+    info = { namespace = 'colors', brief = 'Colors', description = '' },
+    elements = {
+      -- Just constants, NO functions that reference them
+      -- The generate_constant_aliases() should still create the alias
+      make_constant('colors.RGB_RED'),
+      make_constant('colors.RGB_GREEN'),
+      make_constant('colors.RGB_BLUE')
+    }
+  }
+  
+  generator.generate_api({ module }, 'test')
+  
+  local output = utils.read_file(output_path('colors'))
+  
+  -- Should have the alias even though no function references these constants
+  luaunit.assertStrContains(output, '---@alias colors.RGB')
+  luaunit.assertStrContains(output, '---| `colors.RGB_RED`')
+  luaunit.assertStrContains(output, '---| `colors.RGB_GREEN`')
+  luaunit.assertStrContains(output, '---| `colors.RGB_BLUE`')
+end
+
+function TestGeneratorAlias:test_multilevel_namespace_constants()
+  -- Multi-level namespace constants like foo.bar.CONST should be in foo.bar.lua
+  -- with field name CONST (not bar.CONST)
+  local module = {
+    info = { namespace = 'foo.bar', brief = 'Foo Bar', description = '' },
+    elements = {
+      make_constant('foo.bar.SETTING_A'),
+      make_constant('foo.bar.SETTING_B')
+    }
+  }
+  
+  generator.generate_api({ module }, 'test')
+  
+  local output = utils.read_file(output_path('foo.bar'))
+  
+  -- Constants should have simple field names (no namespace prefix)
+  luaunit.assertStrContains(output, '---@field SETTING_A integer')
+  luaunit.assertStrContains(output, '---@field SETTING_B integer')
+  
+  -- Should NOT have the partial namespace in the field name
+  luaunit.assertNotStrContains(output, '---@field bar.SETTING')
+  
+  -- Alias should use full names
+  luaunit.assertStrContains(output, '---@alias foo.bar.SETTING')
+  luaunit.assertStrContains(output, '---| `foo.bar.SETTING_A`')
+end
+
 _G.TestGeneratorAlias = TestGeneratorAlias
 
 return TestGeneratorAlias
